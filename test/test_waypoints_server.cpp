@@ -9,7 +9,7 @@
 
 class WaypointTestClient : public rclcpp::Node {
 public:
-  using WaypointAction = tortoisebot_interfaces::action::Waypoint;
+  using WaypointAction = tortoisebot_waypoints::action::Waypoint;
 
   WaypointTestClient() : Node("waypoint_test_client") {
     action_client_ =
