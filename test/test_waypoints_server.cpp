@@ -114,8 +114,8 @@ protected:
 };
 
 TEST_F(WaypointServerTest, TestWaypointNavigation) {
-  const double goal_x = 1.0;
-  const double goal_y = 1.0;
+  const double goal_x = 0.5;
+  const double goal_y = 0.5;
   const double position_tolerance = 0.1;
   const double yaw_tolerance = 0.1;
 
