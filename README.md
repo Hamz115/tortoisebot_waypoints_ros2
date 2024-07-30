@@ -17,6 +17,6 @@ cd ~/ros2_ws && colcon build && source install/setup.bash <br>
 colcon test --packages-select tortoisebot_waypoints --event-handler=console_direct+ <br>
 
 ##### For SUCCESS:
-TEST_X=0.5 TEST_Y=0.5 TEST_TOLERANCE=0.15 colcon test --packages-select tortoisebot_waypoints --event-handler=console_direct+ <br>
+TEST_X=0.5 TEST_Y=0.5 colcon test --packages-select tortoisebot_waypoints --event-handler=console_direct+ <br>
 ##### For FAILURE:
-TEST_X=1.0 TEST_Y=0.5 TEST_TOLERANCE=0.15 colcon test --packages-select tortoisebot_waypoints --event-handler=console_direct+ <br>
+TEST_X=1.0 TEST_Y=0.5 colcon test --packages-select tortoisebot_waypoints --event-handler=console_direct+ <br>

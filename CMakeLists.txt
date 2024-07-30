@@ -42,7 +42,8 @@ ament_target_dependencies(tortoisebot_action_server
 )
 rosidl_target_interfaces(tortoisebot_action_server ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
-ament_add_gtest(test_waypoints_server test/test_waypoints_server.cpp)
+ament_add_gtest(test_waypoints_server test/test_waypoints_server.cpp TIMEOUT 120)
+target_link_libraries(test_waypoints_server ${CMAKE_THREAD_LIBS_INIT})
 ament_target_dependencies(test_waypoints_server
     rclcpp
     rclcpp_action

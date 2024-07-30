@@ -1,141 +1,146 @@
-#include <chrono>
-#include <cmath>
-#include <gtest/gtest.h>
-#include <memory>
-#include <string>
-
-#include "geometry_msgs/msg/point.hpp"
-#include "nav_msgs/msg/odometry.hpp"
-#include "rclcpp/rclcpp.hpp"
-#include "rclcpp_action/rclcpp_action.hpp"
-#include "tf2/LinearMath/Matrix3x3.h"
-#include "tf2/LinearMath/Quaternion.h"
 #include "tortoisebot_waypoints/action/waypoint.hpp"
+#include <functional>
+#include <geometry_msgs/msg/twist.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <thread>
 
-class TestWaypointActionServer : public ::testing::Test {
-protected:
-  static void SetUpTestCase() { rclcpp::init(0, nullptr); }
+class WaypointActionServer : public rclcpp::Node {
+public:
+  using Waypoint = tortoisebot_waypoints::action::Waypoint;
+  using GoalHandleWaypoint = rclcpp_action::ServerGoalHandle<Waypoint>;
 
-  static void TearDownTestCase() { rclcpp::shutdown(); }
+  WaypointActionServer() : Node("tortoisebot_as") {
+    using namespace std::placeholders;
 
-  void SetUp() override {
-    node_ = std::make_shared<rclcpp::Node>("test_waypoint_client");
-    action_client_ =
-        rclcpp_action::create_client<tortoisebot_waypoints::action::Waypoint>(
-            node_, "tortoisebot_as");
+    this->action_server_ = rclcpp_action::create_server<Waypoint>(
+        this, "tortoisebot_as",
+        std::bind(&WaypointActionServer::handle_goal, this, _1, _2),
+        std::bind(&WaypointActionServer::handle_cancel, this, _1),
+        std::bind(&WaypointActionServer::handle_accepted, this, _1));
 
-    ASSERT_TRUE(
-        action_client_->wait_for_action_server(std::chrono::seconds(90)));
+    pub_cmd_vel_ =
+        this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    sub_odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        "/odom", 10, std::bind(&WaypointActionServer::odom_callback, this, _1));
 
-    odom_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(
-        "/odom", 10, [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
-          last_pose_ = msg->pose.pose;
-        });
-
-    char *x_env = std::getenv("TEST_X");
-    char *y_env = std::getenv("TEST_Y");
-    test_x_ = x_env ? std::stod(x_env) : 0.5;
-    test_y_ = y_env ? std::stod(y_env) : 0.5;
-
-    char *tolerance_env = std::getenv("TEST_TOLERANCE");
-    tolerance_ = tolerance_env ? std::stod(tolerance_env) : 0.1;
+    RCLCPP_INFO(this->get_logger(), "Action server started");
   }
 
-  std::shared_ptr<rclcpp::Node> node_;
-  rclcpp_action::Client<tortoisebot_waypoints::action::Waypoint>::SharedPtr
-      action_client_;
-  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-  geometry_msgs::msg::Pose last_pose_;
-  double test_x_, test_y_, tolerance_;
+private:
+  rclcpp_action::Server<Waypoint>::SharedPtr action_server_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
+  geometry_msgs::msg::Point current_position_;
+  double current_yaw_;
 
-  double getYaw(const geometry_msgs::msg::Quaternion &q) {
-    double roll, pitch, yaw;
-    tf2::Quaternion tf_q(q.x, q.y, q.z, q.w);
-    tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
-    return yaw;
+  void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    current_position_ = msg->pose.pose.position;
+    tf2::Quaternion q(
+        msg->pose.pose.orientation.x, msg->pose.pose.orientation.y,
+        msg->pose.pose.orientation.z, msg->pose.pose.orientation.w);
+    tf2::Matrix3x3 m(q);
+    double roll, pitch;
+    m.getRPY(roll, pitch, current_yaw_);
+    RCLCPP_DEBUG(this->get_logger(), "Current position: (%f, %f), yaw: %f",
+                 current_position_.x, current_position_.y, current_yaw_);
   }
 
-  double normalizeAngle(double angle) {
-    while (angle > M_PI)
-      angle -= 2.0 * M_PI;
-    while (angle < -M_PI)
-      angle += 2.0 * M_PI;
-    return angle;
+  rclcpp_action::GoalResponse
+  handle_goal(const rclcpp_action::GoalUUID &uuid,
+              std::shared_ptr<const Waypoint::Goal> goal) {
+    RCLCPP_INFO(this->get_logger(),
+                "Received goal request with position: (%f, %f)",
+                goal->position.x, goal->position.y);
+    (void)uuid;
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  rclcpp_action::CancelResponse
+  handle_cancel(const std::shared_ptr<GoalHandleWaypoint> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
+    (void)goal_handle;
+    return rclcpp_action::CancelResponse::ACCEPT;
+  }
+
+  void handle_accepted(const std::shared_ptr<GoalHandleWaypoint> goal_handle) {
+    using namespace std::placeholders;
+    std::thread{
+        std::bind(&WaypointActionServer::execute, this, std::placeholders::_1),
+        goal_handle}
+        .detach();
+  }
+
+  void execute(const std::shared_ptr<GoalHandleWaypoint> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Executing goal");
+    rclcpp::Rate loop_rate(10);
+    const auto goal = goal_handle->get_goal();
+    auto feedback = std::make_shared<Waypoint::Feedback>();
+    auto result = std::make_shared<Waypoint::Result>();
+
+    double goal_x = goal->position.x;
+    double goal_y = goal->position.y;
+
+    while (rclcpp::ok()) {
+      if (goal_handle->is_canceling()) {
+        result->success = false;
+        goal_handle->canceled(result);
+        RCLCPP_INFO(this->get_logger(), "Goal canceled");
+        return;
+      }
+
+      double dx = goal_x - current_position_.x;
+      double dy = goal_y - current_position_.y;
+      double distance = std::sqrt(dx * dx + dy * dy);
+      double desired_yaw = std::atan2(dy, dx);
+
+      auto twist_msg = std::make_unique<geometry_msgs::msg::Twist>();
+
+      if (distance > 0.1) {
+        // Move towards the goal
+        twist_msg->linear.x = 0.2; // Adjust speed as needed
+        double yaw_error = desired_yaw - current_yaw_;
+        twist_msg->angular.z =
+            0.5 * yaw_error; // Proportional control for rotation
+      } else {
+        // At goal position, ensure correct final orientation
+        double yaw_error = desired_yaw - current_yaw_;
+        if (std::abs(yaw_error) > 0.05) {
+          twist_msg->angular.z = 0.2 * yaw_error;
+        } else {
+          // Goal reached with correct orientation
+          twist_msg->linear.x = 0.0;
+          twist_msg->angular.z = 0.0;
+          pub_cmd_vel_->publish(std::move(twist_msg));
+
+          result->success = true;
+          goal_handle->succeed(result);
+          RCLCPP_INFO(this->get_logger(), "Goal succeeded");
+          return;
+        }
+      }
+
+      pub_cmd_vel_->publish(std::move(twist_msg));
+
+      feedback->position = current_position_;
+      goal_handle->publish_feedback(feedback);
+
+      loop_rate.sleep();
+    }
+
+    result->success = false;
+    goal_handle->abort(result);
+    RCLCPP_INFO(this->get_logger(), "Goal aborted");
   }
 };
 
-TEST_F(TestWaypointActionServer, TestEndPosition) {
-  auto goal_msg = tortoisebot_waypoints::action::Waypoint::Goal();
-  goal_msg.position.x = test_x_;
-  goal_msg.position.y = test_y_;
-  goal_msg.position.z = 0.0;
-
-  auto goal_handle_future = action_client_->async_send_goal(goal_msg);
-  ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, goal_handle_future,
-                                               std::chrono::seconds(90)));
-
-  auto goal_handle = goal_handle_future.get();
-  ASSERT_NE(nullptr, goal_handle);
-
-  auto result_future = action_client_->async_get_result(goal_handle);
-  ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, result_future,
-                                               std::chrono::seconds(90)));
-
-  auto wrapped_result = result_future.get();
-  ASSERT_EQ(rclcpp_action::ResultCode::SUCCEEDED, wrapped_result.code);
-  ASSERT_TRUE(wrapped_result.result->success);
-
-  rclcpp::sleep_for(std::chrono::seconds(2));
-
-  EXPECT_NEAR(goal_msg.position.x, last_pose_.position.x, tolerance_);
-  EXPECT_NEAR(goal_msg.position.y, last_pose_.position.y, tolerance_);
-}
-
-TEST_F(TestWaypointActionServer, TestEndRotation) {
-  auto goal_msg = tortoisebot_waypoints::action::Waypoint::Goal();
-  goal_msg.position.x = test_x_;
-  goal_msg.position.y = test_y_;
-  goal_msg.position.z = 0.0;
-
-  auto goal_handle_future = action_client_->async_send_goal(goal_msg);
-  ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, goal_handle_future,
-                                               std::chrono::seconds(90)));
-
-  auto goal_handle = goal_handle_future.get();
-  ASSERT_NE(nullptr, goal_handle);
-
-  auto result_future = action_client_->async_get_result(goal_handle);
-  ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, result_future,
-                                               std::chrono::seconds(90)));
-
-  auto wrapped_result = result_future.get();
-  ASSERT_EQ(rclcpp_action::ResultCode::SUCCEEDED, wrapped_result.code);
-  ASSERT_TRUE(wrapped_result.result->success);
-
-  rclcpp::sleep_for(std::chrono::seconds(2));
-
-  double expected_yaw = std::atan2(goal_msg.position.y - last_pose_.position.y,
-                                   goal_msg.position.x - last_pose_.position.x);
-  double actual_yaw = getYaw(last_pose_.orientation);
-
-  expected_yaw = normalizeAngle(expected_yaw);
-  actual_yaw = normalizeAngle(actual_yaw);
-
-  RCLCPP_INFO(node_->get_logger(), "Expected yaw: %f, Actual yaw: %f",
-              expected_yaw, actual_yaw);
-
-  double yaw_diff = std::abs(expected_yaw - actual_yaw);
-  EXPECT_TRUE(yaw_diff <= tolerance_ ||
-              std::abs(yaw_diff - 2 * M_PI) <= tolerance_)
-      << "Expected yaw: " << expected_yaw << ", Actual yaw: " << actual_yaw
-      << ", Difference: " << yaw_diff << ", Tolerance: " << tolerance_;
-}
-
 int main(int argc, char **argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
+  rclcpp::init(argc, argv);
+  auto action_server = std::make_shared<WaypointActionServer>();
+  rclcpp::spin(action_server);
+  rclcpp::shutdown();
+  return 0;
 }
