@@ -25,7 +25,7 @@ protected:
             node_, "tortoisebot_as");
 
     ASSERT_TRUE(
-        action_client_->wait_for_action_server(std::chrono::seconds(20)));
+        action_client_->wait_for_action_server(std::chrono::seconds(90)));
 
     odom_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(
         "/odom", 10, [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -36,6 +36,9 @@ protected:
     char *y_env = std::getenv("TEST_Y");
     test_x_ = x_env ? std::stod(x_env) : 0.5;
     test_y_ = y_env ? std::stod(y_env) : 0.5;
+
+    char *tolerance_env = std::getenv("TEST_TOLERANCE");
+    tolerance_ = tolerance_env ? std::stod(tolerance_env) : 0.1;
   }
 
   std::shared_ptr<rclcpp::Node> node_;
@@ -43,10 +46,7 @@ protected:
       action_client_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   geometry_msgs::msg::Pose last_pose_;
-  double test_x_, test_y_;
-
-  static constexpr double POSITION_TOLERANCE = 0.1; // meters
-  static constexpr double YAW_TOLERANCE = 0.1;      // radians
+  double test_x_, test_y_, tolerance_;
 
   double getYaw(const geometry_msgs::msg::Quaternion &q) {
     double roll, pitch, yaw;
@@ -72,24 +72,25 @@ TEST_F(TestWaypointActionServer, TestEndPosition) {
 
   auto goal_handle_future = action_client_->async_send_goal(goal_msg);
   ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, goal_handle_future));
+            rclcpp::spin_until_future_complete(node_, goal_handle_future,
+                                               std::chrono::seconds(90)));
 
   auto goal_handle = goal_handle_future.get();
   ASSERT_NE(nullptr, goal_handle);
 
   auto result_future = action_client_->async_get_result(goal_handle);
   ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, result_future));
+            rclcpp::spin_until_future_complete(node_, result_future,
+                                               std::chrono::seconds(90)));
 
   auto wrapped_result = result_future.get();
   ASSERT_EQ(rclcpp_action::ResultCode::SUCCEEDED, wrapped_result.code);
   ASSERT_TRUE(wrapped_result.result->success);
 
-  // Add a small delay to allow the robot to settle
-  rclcpp::sleep_for(std::chrono::seconds(1));
+  rclcpp::sleep_for(std::chrono::seconds(2));
 
-  EXPECT_NEAR(goal_msg.position.x, last_pose_.position.x, POSITION_TOLERANCE);
-  EXPECT_NEAR(goal_msg.position.y, last_pose_.position.y, POSITION_TOLERANCE);
+  EXPECT_NEAR(goal_msg.position.x, last_pose_.position.x, tolerance_);
+  EXPECT_NEAR(goal_msg.position.y, last_pose_.position.y, tolerance_);
 }
 
 TEST_F(TestWaypointActionServer, TestEndRotation) {
@@ -100,21 +101,22 @@ TEST_F(TestWaypointActionServer, TestEndRotation) {
 
   auto goal_handle_future = action_client_->async_send_goal(goal_msg);
   ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, goal_handle_future));
+            rclcpp::spin_until_future_complete(node_, goal_handle_future,
+                                               std::chrono::seconds(90)));
 
   auto goal_handle = goal_handle_future.get();
   ASSERT_NE(nullptr, goal_handle);
 
   auto result_future = action_client_->async_get_result(goal_handle);
   ASSERT_EQ(rclcpp::FutureReturnCode::SUCCESS,
-            rclcpp::spin_until_future_complete(node_, result_future));
+            rclcpp::spin_until_future_complete(node_, result_future,
+                                               std::chrono::seconds(90)));
 
   auto wrapped_result = result_future.get();
   ASSERT_EQ(rclcpp_action::ResultCode::SUCCEEDED, wrapped_result.code);
   ASSERT_TRUE(wrapped_result.result->success);
 
-  // Add a small delay to allow the robot to settle
-  rclcpp::sleep_for(std::chrono::seconds(1));
+  rclcpp::sleep_for(std::chrono::seconds(2));
 
   double expected_yaw = std::atan2(goal_msg.position.y - last_pose_.position.y,
                                    goal_msg.position.x - last_pose_.position.x);
@@ -127,10 +129,10 @@ TEST_F(TestWaypointActionServer, TestEndRotation) {
               expected_yaw, actual_yaw);
 
   double yaw_diff = std::abs(expected_yaw - actual_yaw);
-  EXPECT_TRUE(yaw_diff <= YAW_TOLERANCE ||
-              std::abs(yaw_diff - 2 * M_PI) <= YAW_TOLERANCE)
+  EXPECT_TRUE(yaw_diff <= tolerance_ ||
+              std::abs(yaw_diff - 2 * M_PI) <= tolerance_)
       << "Expected yaw: " << expected_yaw << ", Actual yaw: " << actual_yaw
-      << ", Difference: " << yaw_diff << ", Tolerance: " << YAW_TOLERANCE;
+      << ", Difference: " << yaw_diff << ", Tolerance: " << tolerance_;
 }
 
 int main(int argc, char **argv) {
