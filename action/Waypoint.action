@@ -1,0 +1,7 @@
+# Waypoint.action
+geometry_msgs/Point position
+---
+bool success
+---
+geometry_msgs/Point position
+string state
