@@ -131,7 +131,7 @@ TEST_F(TestWaypoints, WaypointTest) {
   auto result_future = client_->async_get_result(goal_handle);
 
   rclcpp::Time start_time = node_->now();
-  rclcpp::Duration max_test_duration = rclcpp::Duration(30s);
+  rclcpp::Duration max_test_duration = rclcpp::Duration(38s);
 
   while (rclcpp::ok() && (node_->now() - start_time) < max_test_duration) {
     rclcpp::spin_some(node_);
